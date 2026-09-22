@@ -1,6 +1,8 @@
 # Antigravity AutoUpdate
 
-![Antigravity AutoUpdate](assets/antigravity-autoupdate.svg)
+<p align="center">
+  <img src="assets/antigravity-autoupdate.svg" alt="Antigravity AutoUpdate" width="120">
+</p>
 
 Automatic updater for Google Antigravity Hub on Linux x64.
 
