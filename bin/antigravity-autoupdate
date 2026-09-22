@@ -1,0 +1,130 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+INSTALL_DIR="$HOME/.local/opt/Antigravity-x64"
+BIN_LINK="$HOME/.local/bin/antigravity"
+DOWNLOAD_PAGE="https://antigravity.google/download"
+TMP_ROOT=""
+
+cleanup() { [[ -n "$TMP_ROOT" && -d "$TMP_ROOT" ]] && rm -rf "$TMP_ROOT"; }
+trap cleanup EXIT
+die() { echo "ERROR: $*" >&2; exit 1; }
+
+require_commands() {
+  for cmd in curl grep sed tar gzip; do
+    command -v "$cmd" >/dev/null 2>&1 || die "missing command: $cmd"
+  done
+}
+
+release_info() {
+  TMP_ROOT="$(mktemp -d)"
+  local html="$TMP_ROOT/download.html"
+  curl -fsSL --compressed "$DOWNLOAD_PAGE" -o "$html" || die "official page unavailable"
+  local url release version
+  url="$(grep -oE 'https://storage\.googleapis\.com/antigravity-public/antigravity-hub/[^"]+/linux-x64/Antigravity\.tar\.gz' "$html" | head -n1)"
+  [[ -n "$url" ]] || die "Linux x64 archive not found"
+  release="$(sed -nE 's#https://storage\.googleapis\.com/antigravity-public/antigravity-hub/([^/]+)/linux-x64/Antigravity\.tar\.gz#\1#p' <<<"$url")"
+  version="$(sed -E 's/^([0-9]+\.[0-9]+\.[0-9]+).*/\1/' <<<"$release")"
+  printf '%s\n%s\n%s\n' "$url" "$release" "$version"
+}
+
+local_version() {
+  local v=""
+  if [[ -f "$INSTALL_DIR/product.json" ]]; then
+    v="$(grep -oE '"version"[[:space:]]*:[[:space:]]*"[^"]+"' "$INSTALL_DIR/product.json" | head -n1 | sed -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')" || true
+  fi
+  printf '%s' "$v"
+}
+
+cmd_check() {
+  require_commands
+  local i url release version current
+  i="$(release_info)"
+  url="$(sed -n '1p' <<<"$i")"
+  release="$(sed -n '2p' <<<"$i")"
+  version="$(sed -n '3p' <<<"$i")"
+  current="$(local_version)"
+  echo "Archive: $url"
+  echo "Release: $release"
+  echo "Published version: $version"
+  [[ -n "$current" ]] && echo "Local version: $current" || echo "Local version: unknown"
+}
+
+cmd_update() {
+  require_commands
+  local i url release remote current
+  i="$(release_info)"
+  url="$(sed -n '1p' <<<"$i")"
+  release="$(sed -n '2p' <<<"$i")"
+  remote="$(sed -n '3p' <<<"$i")"
+  current="$(local_version)"
+  echo "Published version: $remote"
+  [[ -n "$current" ]] && echo "Local version: $current"
+  if [[ -n "$current" && "$current" == "$remote" ]]; then
+    echo "Already up to date."
+    return 0
+  fi
+
+  local archive="$TMP_ROOT/Antigravity.tar.gz"
+  local stage="$TMP_ROOT/stage"
+  local new_dir="$stage/Antigravity-x64"
+  echo "Downloading..."
+  curl -fL --retry 3 --retry-delay 2 "$url" -o "$archive" || die "download failed"
+  gzip -t "$archive" || die "invalid gzip archive"
+  tar -tzf "$archive" >/dev/null || die "invalid tar.gz archive"
+  mkdir -p "$stage"
+  tar -xzf "$archive" -C "$stage"
+  [[ -x "$new_dir/antigravity" ]] || die "antigravity executable missing"
+  local backup="$TMP_ROOT/Antigravity-old"
+  mkdir -p "$(dirname "$INSTALL_DIR")"
+  if [[ -d "$INSTALL_DIR" ]]; then mv "$INSTALL_DIR" "$backup"; fi
+  if ! mv "$new_dir" "$INSTALL_DIR"; then
+    rm -rf "$INSTALL_DIR"
+    [[ -d "$backup" ]] && mv "$backup" "$INSTALL_DIR"
+    die "installation failed"
+  fi
+  mkdir -p "$(dirname "$BIN_LINK")"
+  ln -sfn "$INSTALL_DIR/antigravity" "$BIN_LINK"
+  echo "Antigravity updated successfully: $remote"
+}
+
+cmd_status() {
+  echo "Installation: $INSTALL_DIR"
+  echo "Launcher: $BIN_LINK"
+  [[ -x "$INSTALL_DIR/antigravity" ]] && echo "Application: installed" || echo "Application: missing"
+  [[ -e "$BIN_LINK" ]] && echo "Launcher: present" || echo "Launcher: missing"
+  systemctl --user status antigravity-update.timer --no-pager 2>/dev/null || true
+}
+
+install_systemd() {
+  local dir="$HOME/.config/systemd/user"
+  mkdir -p "$dir"
+  printf '%s\n' '[Unit]' 'Description=Mise à jour automatique de Google Antigravity' 'After=network-online.target' 'Wants=network-online.target' '' '[Service]' 'Type=oneshot' "ExecStart=$HOME/.local/bin/antigravity-autoupdate update" > "$dir/antigravity-update.service"
+  printf '%s\n' '[Unit]' 'Description=Vérification automatique des mises à jour Antigravity' '' '[Timer]' 'OnBootSec=10min' 'OnUnitActiveSec=6h' 'Persistent=true' '' '[Install]' 'WantedBy=timers.target' > "$dir/antigravity-update.timer"
+  systemctl --user daemon-reload
+  systemctl --user enable --now antigravity-update.timer
+  echo "Systemd timer enabled."
+}
+
+uninstall_systemd() {
+  systemctl --user disable --now antigravity-update.timer 2>/dev/null || true
+  rm -f "$HOME/.config/systemd/user/antigravity-update.service" "$HOME/.config/systemd/user/antigravity-update.timer"
+  systemctl --user daemon-reload
+  echo "Systemd timer removed."
+}
+
+usage() {
+  echo "Usage: antigravity-autoupdate {check|update|status|install-systemd|uninstall-systemd|help}"
+}
+
+cmd="$1"
+[[ -n "$cmd" ]] || cmd=help
+case "$cmd" in
+  check) cmd_check ;;
+  update) cmd_update ;;
+  status) cmd_status ;;
+  install-systemd) install_systemd ;;
+  uninstall-systemd) uninstall_systemd ;;
+  help|-h|--help) usage ;;
+  *) usage; exit 2 ;;
+esac
