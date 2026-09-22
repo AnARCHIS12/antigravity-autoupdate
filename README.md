@@ -12,15 +12,15 @@ Antigravity AutoUpdate keeps the **Antigravity Hub desktop application** up to d
 
 ## Features
 
-- 🔎 Detects the latest Linux x64 release directly from the official Antigravity download page.
-- 📦 Does not hard-code a specific build number.
-- ⬇️ Downloads the official Google Cloud Storage archive.
-- ✅ Checks that the downloaded `.tar.gz` archive is valid before installation.
-- 🔄 Replaces the installed version automatically when an update is available.
-- 🔗 Keeps a stable executable at `~/.local/bin/antigravity`.
-- 🖥️ Provides a simple CLI for checking, updating and inspecting the installation.
-- ⏱️ Can install a user-level systemd timer that checks every six hours.
-- 🔐 Does not require `sudo` or system-wide installation.
+- Detects the latest Linux x64 release directly from the official Antigravity download page.
+- Does not hard-code a specific build number.
+- Downloads the official Google Cloud Storage archive.
+- Checks that the downloaded `.tar.gz` archive is valid before installation.
+- Replaces the installed version automatically when an update is available.
+- Keeps a stable executable at `~/.local/bin/antigravity`.
+- Provides a simple CLI for checking, updating and inspecting the installation.
+- Can install a user-level systemd timer that checks every six hours.
+- Does not require `sudo` or system-wide installation.
 
 ## Installation
 
