@@ -6,7 +6,11 @@ BIN_LINK="$HOME/.local/bin/antigravity"
 DOWNLOAD_PAGE="https://antigravity.google/download"
 TMP_ROOT=""
 
-cleanup() { [[ -n "$TMP_ROOT" && -d "$TMP_ROOT" ]] && rm -rf "$TMP_ROOT"; }
+cleanup() {
+  if [[ -n "${TMP_ROOT:-}" && -d "${TMP_ROOT:-}" ]]; then
+    rm -rf "$TMP_ROOT"
+  fi
+}
 trap cleanup EXIT
 die() { echo "ERROR: $*" >&2; exit 1; }
 
@@ -17,11 +21,9 @@ require_commands() {
 }
 
 release_info() {
-  TMP_ROOT="$(mktemp -d)"
-  local html="$TMP_ROOT/download.html"
-  curl -fsSL --compressed "$DOWNLOAD_PAGE" -o "$html" || die "official page unavailable"
-  local url release version
-  url="$(grep -oE 'https://storage\.googleapis\.com/antigravity-public/antigravity-hub/[^"]+/linux-x64/Antigravity\.tar\.gz' "$html" | head -n1)"
+  local html url release version
+  html="$(curl -fsSL --compressed "$DOWNLOAD_PAGE")" || die "official page unavailable"
+  url="$(grep -oE 'https://storage\.googleapis\.com/antigravity-public/antigravity-hub/[^"]+/linux-x64/Antigravity\.tar\.gz' <<<"$html" | head -n1)"
   [[ -n "$url" ]] || die "Linux x64 archive not found"
   release="$(sed -nE 's#https://storage\.googleapis\.com/antigravity-public/antigravity-hub/([^/]+)/linux-x64/Antigravity\.tar\.gz#\1#p' <<<"$url")"
   version="$(sed -E 's/^([0-9]+\.[0-9]+\.[0-9]+).*/\1/' <<<"$release")"
@@ -30,8 +32,24 @@ release_info() {
 
 local_version() {
   local v=""
-  if [[ -f "$INSTALL_DIR/product.json" ]]; then
-    v="$(grep -oE '"version"[[:space:]]*:[[:space:]]*"[^"]+"' "$INSTALL_DIR/product.json" | head -n1 | sed -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')" || true
+  if [[ -f "$INSTALL_DIR/resources/app.asar" ]]; then
+    v="$(grep -z -aoP '"productName":\s*"Antigravity",\s*"version":\s*"\K[0-9.]+' "$INSTALL_DIR/resources/app.asar" 2>/dev/null | tr -d '\0' | head -n1)" || true
+  fi
+  if [[ -z "$v" && -f "$INSTALL_DIR/product.json" ]]; then
+    v="$(grep -oE '"version"[[:space:]]*:[[:space:]]*"[^"]+"' "$INSTALL_DIR/product.json" 2>/dev/null | head -n1 | sed -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')" || true
+  fi
+  if [[ -z "$v" && -f "$INSTALL_DIR/resources/app.asar" ]] && command -v python3 >/dev/null 2>&1; then
+    v="$(python3 -c '
+import sys, re
+try:
+    with open(sys.argv[1], "rb") as f:
+        data = f.read(500000)
+    m = re.search(rb"\"productName\":\s*\"Antigravity\",\s*\"version\":\s*\"([0-9.]+)\"", data)
+    if m:
+        print(m.group(1).decode("utf-8"))
+except Exception:
+    pass
+' "$INSTALL_DIR/resources/app.asar" 2>/dev/null)" || true
   fi
   printf '%s' "$v"
 }
@@ -47,7 +65,11 @@ cmd_check() {
   echo "Archive: $url"
   echo "Release: $release"
   echo "Published version: $version"
-  [[ -n "$current" ]] && echo "Local version: $current" || echo "Local version: unknown"
+  if [[ -n "$current" ]]; then
+    echo "Local version: $current"
+  else
+    echo "Local version: unknown"
+  fi
 }
 
 cmd_update() {
@@ -65,6 +87,7 @@ cmd_update() {
     return 0
   fi
 
+  TMP_ROOT="$(mktemp -d)"
   local archive="$TMP_ROOT/Antigravity.tar.gz"
   local stage="$TMP_ROOT/stage"
   local new_dir="$stage/Antigravity-x64"
@@ -89,17 +112,32 @@ cmd_update() {
 }
 
 cmd_status() {
+  local current
+  current="$(local_version)"
   echo "Installation: $INSTALL_DIR"
   echo "Launcher: $BIN_LINK"
-  [[ -x "$INSTALL_DIR/antigravity" ]] && echo "Application: installed" || echo "Application: missing"
-  [[ -e "$BIN_LINK" ]] && echo "Launcher: present" || echo "Launcher: missing"
+  if [[ -x "$INSTALL_DIR/antigravity" ]]; then
+    echo "Application: installed"
+  else
+    echo "Application: missing"
+  fi
+  if [[ -n "$current" ]]; then
+    echo "Local version: $current"
+  else
+    echo "Local version: unknown"
+  fi
+  if [[ -e "$BIN_LINK" ]]; then
+    echo "Launcher: present"
+  else
+    echo "Launcher: missing"
+  fi
   systemctl --user status antigravity-update.timer --no-pager 2>/dev/null || true
 }
 
 install_systemd() {
   local dir="$HOME/.config/systemd/user"
   mkdir -p "$dir"
-  printf '%s\n' '[Unit]' 'Description=Mise à jour automatique de Google Antigravity' 'After=network-online.target' 'Wants=network-online.target' '' '[Service]' 'Type=oneshot' "ExecStart=$HOME/.local/bin/antigravity-autoupdate update" > "$dir/antigravity-update.service"
+  printf '%s\n' '[Unit]' 'Description=Mise à jour automatique de Google Antigravity' 'After=network-online.target' 'Wants=network-online.target' '' '[Service]' 'Type=oneshot' 'ExecStart=%h/.local/bin/antigravity-autoupdate update' > "$dir/antigravity-update.service"
   printf '%s\n' '[Unit]' 'Description=Vérification automatique des mises à jour Antigravity' '' '[Timer]' 'OnBootSec=10min' 'OnUnitActiveSec=6h' 'Persistent=true' '' '[Install]' 'WantedBy=timers.target' > "$dir/antigravity-update.timer"
   systemctl --user daemon-reload
   systemctl --user enable --now antigravity-update.timer
